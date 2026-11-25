@@ -24,6 +24,16 @@ export function sessionsDir(cwd: string): string {
   return join(cwd, ".memory", "sessions");
 }
 
+/** Shaped no-tools inputs — kept for transparency, never committed. */
+export function inputsDir(cwd: string): string {
+  return join(cwd, ".memory", "inputs");
+}
+
+/** Same basename as the summary, different folder — clean pairing. */
+export function inputPath(cwd: string, index: number, name: string): string {
+  return join(inputsDir(cwd), `${index}-${name}.md`);
+}
+
 export function summaryPath(cwd: string, index: number, name: string): string {
   return join(sessionsDir(cwd), `${index}-${name}.md`);
 }

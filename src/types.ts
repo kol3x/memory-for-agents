@@ -70,6 +70,8 @@ export interface PipelineResult {
   /** human-readable name, from the model's Name: line when present */
   name?: string;
   summary: string;
+  /** shaped no-tools input that was fed to the summarizer */
+  input: string;
   sessionId: string;
   agent?: string;
   messageCount: number;

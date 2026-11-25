@@ -8,6 +8,7 @@ import { sessionName, slugify } from "./naming.js";
 import {
   renderMarkdown,
   summaryPath,
+  inputPath,
   debugDir,
   debugFileName,
   findExistingSummary,
@@ -84,6 +85,11 @@ async function main() {
     (result.name ? slugify(result.name) : sessionName(transcript));
   const index = existing?.index ?? nextIndex(cwd);
 
+  // shaped no-tools input — transparency artifact, never committed
+  const inputFile = inputPath(cwd, index, name);
+  mkdirSync(dirname(inputFile), { recursive: true });
+  writeFileSync(inputFile, result.input + "\n");
+
   const file = summaryPath(cwd, index, name);
   mkdirSync(dirname(file), { recursive: true });
   const spend = transcript.spend;
@@ -101,6 +107,7 @@ async function main() {
   );
   writeFileSync(file, md);
   console.log(file);
+  console.log(inputFile);
 }
 
 main().catch((err) => {

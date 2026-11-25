@@ -7,6 +7,7 @@ import { runPipeline } from "../src/pipeline.js";
 import {
   renderMarkdown,
   summaryPath,
+  inputPath,
   debugDir,
   debugFileName,
   findExistingSummary,
@@ -27,6 +28,7 @@ describe("pipeline", () => {
     const t = parsePiSession(fixture);
     const r = await runPipeline(t, { llm: stubLlm });
     expect(r.name).toBe("session summary layer");
+    expect(r.input).toContain("[user] Add a login endpoint");
     expect(r.summary).toContain("SUMMARY OF INPUT");
     expect(r.summary).not.toMatch(/^Name:/);
     expect(r.sessionId).toBe("test-session-001");
@@ -71,6 +73,13 @@ describe("markdown writer", () => {
     expect(md).toContain("cost_usd: 0.01"); // 0.0021 rounds up to 2 decimals
     expect(md).not.toContain("cwd:");
     expect(md).toContain("SUMMARY OF INPUT");
+
+    // paired input artifact lands in .memory/inputs/ with the same basename
+    const ifile = inputPath(dir, 1, "test-session");
+    expect(ifile).toContain(join(".memory", "inputs"));
+    mkdirSync(dirname(ifile), { recursive: true });
+    writeFileSync(ifile, r.input + "\n");
+    expect(readFileSync(ifile, "utf-8")).toContain("[user] Add a login endpoint");
 
     const ddir = debugDir(dir, r.sessionId);
     mkdirSync(ddir, { recursive: true });
