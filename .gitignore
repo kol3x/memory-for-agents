@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+
+# pipeline debug artifacts — never tracked
+.memory/debug/
+
+# tools-in summaries are a privacy liability; if one ever exists, never track it
+*with-tools*
