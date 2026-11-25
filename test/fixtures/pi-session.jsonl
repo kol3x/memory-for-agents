@@ -1,0 +1,11 @@
+{"type":"session","version":3,"id":"test-session-001","timestamp":"2026-11-25T10:00:00.000Z","cwd":"/tmp/proj-x"}
+{"type":"model_change","id":"m1","parentId":null,"timestamp":"2026-11-25T10:00:00.100Z","provider":"openrouter","modelId":"test-model"}
+{"type":"message","id":"m2","parentId":"m1","timestamp":"2026-11-25T10:00:01.000Z","message":{"role":"system","content":"You are a coding assistant harness preamble that must be dropped."}}
+{"type":"message","id":"m3","parentId":"m2","timestamp":"2026-11-25T10:00:02.000Z","message":{"role":"user","content":[{"type":"text","text":"Add a login endpoint to the API. Use JWT."}]}}
+{"type":"message","id":"m4","parentId":"m3","timestamp":"2026-11-25T10:00:03.000Z","message":{"role":"assistant","content":[{"type":"thinking","text":"I should look at the project structure first."},{"type":"toolCall","id":"call_a","name":"bash","arguments":{"command":"ls src/"}},{"type":"toolCall","id":"call_b","name":"read","arguments":{"path":"src/server.ts"}}]}}
+{"type":"message","id":"m5","parentId":"m4","timestamp":"2026-11-25T10:00:04.000Z","message":{"role":"toolResult","toolCallId":"call_a","toolName":"bash","content":[{"type":"text","text":"src/\nserver.ts\nauth.ts"}],"isError":false,"durationMs":12}}
+{"type":"message","id":"m6","parentId":"m4","timestamp":"2026-11-25T10:00:05.000Z","message":{"role":"toolResult","toolCallId":"call_b","toolName":"read","content":[{"type":"text","text":"export const app = express();"}],"isError":false,"durationMs":3}}
+{"type":"message","id":"m7","parentId":"m6","timestamp":"2026-11-25T10:00:06.000Z","message":{"role":"assistant","content":[{"type":"text","text":"I will use jsonwebtoken and add POST /login. Proceed?"}]}}
+{"type":"message","id":"m8","parentId":"m7","timestamp":"2026-11-25T10:00:07.000Z","message":{"role":"user","content":[{"type":"text","text":"Yes, go ahead. Also add rate limiting to it."}]}}
+{"type":"message","id":"m9","parentId":"m8","timestamp":"2026-11-25T10:00:08.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Done. Added POST /login with JWT and rate limiting."}]}}
+{"type":"message","id":"m10","parentId":"m9","timestamp":"2026-11-25T10:00:09.000Z","message":{"role":"toolResult","toolCallId":"call_c","toolName":"bash","content":[{"type":"text","text":"exit 1: tests failed"}],"isError":true,"durationMs":900}}
