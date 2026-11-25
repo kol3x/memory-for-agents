@@ -27,6 +27,7 @@ export function buildPrompt(input: PromptInput): { system: string; user: string 
       '"assistant" messages are speculative; only include their content if the user explicitly agreed or confirmed it.',
       "Be conservative — avoid adding unconfirmed assumptions.",
       "Tool activity has been omitted from this input; do not invent or reference tool details.",
+      "Never include private data in the summary: usernames, home directories, absolute paths, hostnames, email addresses, API keys, tokens, or other secrets. Refer to such things generically (e.g. \"the project dir\", \"the auth config\").",
       'Begin the response with a single line "Name: <2-5 word name for this session>" followed by the summary.',
     ].join(" "),
     "Messages:",

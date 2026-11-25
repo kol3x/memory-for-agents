@@ -25,6 +25,13 @@ describe("prompt builder", () => {
     const p = buildPrompt(base);
     expect(p.user).toContain("Tool activity has been omitted");
   });
+
+  it("instructs the model to filter out private data", () => {
+    const p = buildPrompt(base);
+    expect(p.user).toContain("Never include private data");
+    expect(p.user).toContain("usernames");
+    expect(p.user).toContain("API keys");
+  });
 });
 
 describe("openrouter client", () => {
