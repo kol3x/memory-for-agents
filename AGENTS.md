@@ -10,4 +10,4 @@
 ## Privacy
 
 - Summaries must never contain private system info (paths, usernames, hostnames, secrets). Tool activity is excluded from summary input by design.
-- `.memory/debug/` is never committed. There is no tools-in summary mode; do not reintroduce one without removing its privacy liability.
+- `.memory/debug/` and `.memory/inputs/` (shaped no-tools inputs) are never committed. There is no tools-in summary mode; do not reintroduce one without removing its privacy liability.

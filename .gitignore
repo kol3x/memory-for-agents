@@ -6,5 +6,8 @@ dist/
 # pipeline debug artifacts — never tracked
 .memory/debug/
 
+# shaped no-tools inputs — transparency layer, never tracked
+.memory/inputs/
+
 # tools-in summaries are a privacy liability; if one ever exists, never track it
 *with-tools*

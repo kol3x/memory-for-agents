@@ -5,19 +5,18 @@ index: 1
 date: 2026-11-25T12:31:34.404Z
 agent: pi
 model: z-ai/glm-5.3-flash
-cost_usd: 0.13
+cost_usd: 0.17
 ---
 
-Project: memory layer for agents (follow-on to pawmc). Current component: session-summary layer — local-first, TypeScript, integration tests for major features and critical paths, summaries saved as markdown. Reads pi sessions now; must support multiple popular agents later.
-
-Built and smoke-tested on a live pi session: pi JSONL v3 adapter → normalized transcript → input shaper → summarizer (OpenRouter via env vars, fetch-only core so a future Cloudflare Workers move needs no rewrite) → markdown writer, plus CLI entry. Debug mode dumps every pipeline step (transcript, input, prompt, LLM response, name) to `.memory/debug/<sessionId>/`. Test suite green, tsc clean.
-
-Summaries live in `<project>/.memory/sessions/` (user chose repo-local over central). Filenames: `<index>-<name>.md` — plain, non-padded numeric index (frontmatter `index` is the authoritative sort key) and a name the model derives via a `Name:` line in its output (slugified; fallback: first user-message words). Re-runs reuse a session's existing index/name. Whether re-runs should upgrade the name is an open question.
-
-Prompt: pawmc-style update-by-incorporation. System instruction: "User values succinct and direct outputs without extra formatting, warnings, and politeness." Prioritize user messages (confirmed intent); include assistant content only if the user agreed. No fixed summary sections or format.
-
-Metadata evolution per user decisions: cwd removed (sessions are meant to be shareable in repos — team or open source — so no private paths); cache read/write dropped as too much info; then tokens dropped entirely ("price is talking for itself") — cost_usd is the only spend field. Cost is session-level (not summary-level), summed from pi's per-message `cost.total` (exact, not estimated), rounded up to 2 decimals.
-
-Tools decision: the original A/B plan (with-tools vs no-tools) is resolved — tools-in dropped completely as a liability (tool calls carry absolute paths, file contents, potential secrets). Only user+assistant text feeds the summarizer. User judged no-tools output clearly better to the eye; floated a future opt-in "additional context" layer (tool activity summarized on top of the no-tools summary, stored separately, possibly redacted or run on a local model) — undecided.
-
-Git: initialized on `main`; only no-tools summaries tracked; `.memory/debug/` and any `*with-tools*` files gitignored. AGENTS.md repo rule: regenerate the current session's summary before committing, include it in the commit, never commit debug artifacts, never reintroduce tools-in without resolving the liability. Everything staged but uncommitted — awaiting user's go-ahead.
+- New project: memory layer for agents, building on experience from pawmc. First component: a session-summary layer.
+- Constraints: everything local for now, TypeScript, integration tests for major features and critical paths, summaries saved as markdown, works with pi now and multiple popular agents later; runtime likely moving to Cloudflare Workers in the future.
+- Architecture (built and accepted through iteration): pi session adapter → normalized transcript → input shaper → summarizer (OpenRouter, env-configured) → markdown writer, with a debug mode dumping every pipeline step (transcript, input, prompt, LLM response) for review.
+- Summaries live in the project's `.memory/sessions/`; one summary per session for now.
+- Summary format: deliberately unstructured — no goals/decisions/files/next-steps sections. Prompt follows the pawmc pattern: succinct/direct system instruction, user messages prioritized as confirmed intent, assistant content included only if user-agreed, conservative about unconfirmed assumptions.
+- Original A/B plan (with-tools vs no-tools input) resolved: user preferred no-tools by eye and dropped tools-in completely — a liability. A possible opt-in "additional context" tool layer over the no-tools summary was discussed but deferred; structural answer postponed until the product needs it.
+- Metadata evolution (user-driven trimming): agent name (Pi), session-level (not summary-level) spend, cost rounded up to 2 decimals, cwd removed entirely for privacy since sessions may be shared in repos (teams/open source). Cache read/write dropped, then total, then tokens dropped entirely — `cost_usd` alone. Final frontmatter: session, name, index, date, agent, model, cost_usd.
+- Filenames: human-readable name derived from the summary itself (model emits a `Name:` line, slugified) with a plain numeric index prefix for sorting — no zero-padding. Re-runs reuse existing index/name.
+- An early cost estimate double-counted (summed per-message cost components when a total existed); corrected to use per-message cost totals.
+- Git initialized; only no-tools summaries tracked, debug artifacts gitignored. Repo rule (AGENTS.md): regenerate the session summary before each commit, include it in the commit, never commit debug artifacts, never reintroduce tools-in without resolving its liability. Committed gradually in logical steps.
+- Shaped no-tools input is written on every run to a separate gitignored folder (`.memory/inputs/`) paired by basename with the summary — transparency stays local. Motivation: raw conversation text can contain private info (an assistant message once leaked a home-dir path), so the untracked input is treated as a "timer bomb" risk; structural fix deferred.
+- Latest request (pending): add a private-data filter to the summarizer prompt.
