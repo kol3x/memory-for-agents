@@ -1,7 +1,7 @@
 ---
-updated: 2026-11-26T13:19:32.159Z
-sessions: 1:1fa4bf8c, 2:c66f8d4c
-cost_usd: 0.0038
+updated: 2026-11-26T13:21:12.705Z
+sessions: 1:1fa4bf8c, 2:6ae38a8e
+cost_usd: 0.0064
 ---
 
 Project: memory layer for AI agents (local-first POC), leveraging prior pawmc experience. Layers: session summaries + repo-wide memory. TypeScript, everything local for now; runtime likely moves to Cloudflare Workers later (fetch-only HTTP keeps the code portable). Works with pi now, more agents later via adapters. Vitest integration tests for major features/critical paths use a fake LLM client.
@@ -26,5 +26,5 @@ Rules (AGENTS.md): regenerate the session summary before each commit and include
 
 Pending:
 - Next feature: auto-load repo memory into new agent sessions with no extra toolcalls. Unconfirmed proposal: keep `.memory/repo.md` agent-neutral and generate an agent-specific system-prompt include from it via the same command on each repo update; plain pointer in agent instructions rejected (costs a toolcall); project extension was the other alternative.
-- Incremental commits for the cost-accounting fix were in progress at session end (implementation verified: tests/typecheck clean, totals corrected).
+- Cost-fix commit landed; memory-file commits were still pending at session end.
 - Structural privacy design for ever sharing raw inputs; optional deterministic secret-pattern post-check.
