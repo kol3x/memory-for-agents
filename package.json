@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "test": "vitest run",
-    "summarize": "tsx src/cli.ts"
+    "summarize": "tsx src/cli.ts",
+    "repo": "tsx src/cli.ts --repo",
+    "sync-agents": "tsx src/cli.ts --sync-agents"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
