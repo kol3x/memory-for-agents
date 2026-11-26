@@ -11,15 +11,11 @@ import {
 } from "../src/repo.js";
 import type { LlmResponse } from "../src/summarizer.js";
 
-function fakeLlm(
-  responses: { text: string; cost: number }[],
-  calls: { system: string; user: string }[] = [],
-): any {
+function fakeLlm(responses: string[], calls: { system: string; user: string }[] = []): any {
   let i = 0;
   return async (opts: { system: string; user: string }) => {
     calls.push(opts);
-    const r = responses[i++] ?? { text: "no more canned responses", cost: 0 };
-    return { text: r.text, usage: { cost: r.cost } } satisfies LlmResponse;
+    return { text: responses[i++] ?? "no more canned responses" } satisfies LlmResponse;
   };
 }
 
@@ -29,21 +25,21 @@ function makeRepo(): string {
   return cwd;
 }
 
-function sessionFile(cwd: string, index: number, name: string, body: string): void {
+function sessionFile(cwd: string, index: number, name: string, body: string, cost = 0.1): void {
   writeFileSync(
     join(cwd, ".memory", "sessions", `${index}-${name}.md`),
-    `---\nsession: s-${index}\nname: ${name}\nindex: ${index}\ncost_usd: 0.1\n---\n\n${body}\n`,
+    `---\nsession: s-${index}\nname: ${name}\nindex: ${index}\ncost_usd: ${cost}\n---\n\n${body}\n`,
   );
 }
 
 describe("repo memory update", () => {
-  it("incorporates all sessions into a fresh repo memory", async () => {
+  it("incorporates all sessions; cost = sum of session costs", async () => {
     const cwd = makeRepo();
-    sessionFile(cwd, 1, "first", "Built the session summary layer.");
-    sessionFile(cwd, 2, "second", "Added the repo memory layer.");
+    sessionFile(cwd, 1, "first", "Built the session summary layer.", 0.22);
+    sessionFile(cwd, 2, "second", "Added the repo memory layer.", 0.08);
 
     const calls: { system: string; user: string }[] = [];
-    const llm = fakeLlm([{ text: "Chose plan 2 for auto-loading.", cost: 0.113 }], calls);
+    const llm = fakeLlm(["Chose plan 2 for auto-loading."], calls);
     const result = await updateRepoMemory({ cwd, llm });
 
     expect(result?.included.map((s) => s.index)).toEqual([1, 2]);
@@ -52,25 +48,26 @@ describe("repo memory update", () => {
     expect(calls[0].user).toContain("Added the repo memory layer.");
 
     const md = readFileSync(join(cwd, ".memory", "repo.md"), "utf-8");
-    expect(md).toMatch(/sessions: 1:[0-9a-f]{8}, 2:[0-9a-f]{8}/);
-    expect(md).toContain("cost_usd: 0.113"); // raw cost, not rounded up
+    expect(md).toMatch(/sessions: 1:[0-9a-f]{8}:0.22, 2:[0-9a-f]{8}:0.08/);
+    expect(md).toContain("sessions_cost_usd: 0.3"); // 0.22 + 0.08
+    expect(md).not.toMatch(/^cost_usd:/m); // old ambiguous name gone
     expect(md).toContain("Chose plan 2 for auto-loading.");
     expect(md.startsWith("---\nupdated: ")).toBe(true);
   });
 
   it("uses the previous repo memory as context and only sends changed sessions", async () => {
     const cwd = makeRepo();
-    sessionFile(cwd, 1, "first", "old session");
-    sessionFile(cwd, 2, "second", "old session 2");
-    // first update records both hashes
-    await updateRepoMemory({ cwd, llm: fakeLlm([{ text: "Memory v1.", cost: 0.0011 }]) });
+    sessionFile(cwd, 1, "first", "old session", 0.22);
+    sessionFile(cwd, 2, "second", "old session 2", 0.08);
+    await updateRepoMemory({ cwd, llm: fakeLlm(["Memory v1."]) });
 
-    // session 2 regenerated with new content — must be re-incorporated
-    sessionFile(cwd, 2, "second", "old session 2 — REGENERATED with new findings");
-    sessionFile(cwd, 3, "third", "New session about auto-loading.");
+    // session 2 regenerated with new content and a new cost — must be
+    // re-incorporated and its cost contribution replaced, not re-added
+    sessionFile(cwd, 2, "second", "old session 2 — REGENERATED with new findings", 0.15);
+    sessionFile(cwd, 3, "third", "New session about auto-loading.", 0.05);
 
     const calls: { system: string; user: string }[] = [];
-    const llm = fakeLlm([{ text: "Memory v2.", cost: 0.0022 }], calls);
+    const llm = fakeLlm(["Memory v2."], calls);
     const result = await updateRepoMemory({ cwd, llm });
 
     expect(result?.included.map((s) => s.index)).toEqual([2, 3]);
@@ -80,20 +77,20 @@ describe("repo memory update", () => {
     expect(calls[0].user).not.toContain("old session 2\n"); // unchanged session not sent
 
     const memory = readRepoMemory(cwd);
-    expect(memory?.costUsd).toBe(0.0033); // raw accumulation: 0.0011 + 0.0022
+    expect(memory?.costUsd).toBe(0.42); // 0.22 + 0.15 (replaced) + 0.05
     expect(memory?.body).toBe("Memory v2.");
-    expect(memory?.sessions.get(1)).toBe(hashSession(
+    expect(memory?.sessions.get(2)?.cost).toBe(0.15);
+    expect(memory?.sessions.get(1)?.hash).toBe(hashSession(
       readFileSync(join(cwd, ".memory", "sessions", "1-first.md"), "utf-8"),
     ));
-    expect(memory?.sessions.get(2)).not.toBe(memory?.sessions.get(1)); // new hash recorded
   });
 
   it("returns null when nothing changed since the last update", async () => {
     const cwd = makeRepo();
     sessionFile(cwd, 1, "first", "body");
-    await updateRepoMemory({ cwd, llm: fakeLlm([{ text: "Memory.", cost: 0 }]) });
+    await updateRepoMemory({ cwd, llm: fakeLlm(["Memory."]) });
     const calls: { system: string; user: string }[] = [];
-    const result = await updateRepoMemory({ cwd, llm: fakeLlm([{ text: "x", cost: 0 }], calls) });
+    const result = await updateRepoMemory({ cwd, llm: fakeLlm(["x"], calls) });
     expect(result).toBeNull();
     expect(calls).toHaveLength(0);
   });
@@ -102,21 +99,41 @@ describe("repo memory update", () => {
     const cwd = makeRepo();
     sessionFile(cwd, 1, "first", "Just the body.");
     const calls: { system: string; user: string }[] = [];
-    await updateRepoMemory({ cwd, llm: fakeLlm([{ text: "x", cost: 0 }], calls) });
+    await updateRepoMemory({ cwd, llm: fakeLlm(["x"], calls) });
     expect(calls[0].user).not.toContain("session: s-1");
     expect(calls[0].user).not.toContain("cost_usd");
   });
 
-  it("tracks content hashes, not just indices — same index, new content is unprocessed", async () => {
+  it("tracks content hashes — same index, new content is unprocessed", async () => {
     const cwd = makeRepo();
     sessionFile(cwd, 1, "first", "v1 content");
-    await updateRepoMemory({ cwd, llm: fakeLlm([{ text: "M1", cost: 0 }]) });
+    await updateRepoMemory({ cwd, llm: fakeLlm(["M1"]) });
 
-    sessionFile(cwd, 1, "first", "v2 content");
+    sessionFile(cwd, 1, "first", "v2 content", 0.3);
     const calls: { system: string; user: string }[] = [];
-    const result = await updateRepoMemory({ cwd, llm: fakeLlm([{ text: "M2", cost: 0 }], calls) });
+    const result = await updateRepoMemory({ cwd, llm: fakeLlm(["M2"], calls) });
     expect(result?.included.map((s) => s.index)).toEqual([1]);
     expect(calls[0].user).toContain("v2 content");
+
+    const memory = readRepoMemory(cwd);
+    expect(memory?.costUsd).toBe(0.3); // replaced, not accumulated
+  });
+
+  it("migrates legacy entries without costs by re-incorporating them — even with matching hash", async () => {
+    const cwd = makeRepo();
+    sessionFile(cwd, 1, "first", "body", 0.25);
+    const hash = hashSession(readFileSync(join(cwd, ".memory", "sessions", "1-first.md"), "utf-8"));
+    writeFileSync(
+      join(cwd, ".memory", "repo.md"),
+      `---\nupdated: t\nsessions: 1:${hash}\ncost_usd: 0.01\n---\n\nOld memory.\n`,
+    );
+    const calls: { system: string; user: string }[] = [];
+    const result = await updateRepoMemory({ cwd, llm: fakeLlm(["New memory."], calls) });
+
+    expect(result?.included.map((s) => s.index)).toEqual([1]); // no recorded cost → re-incorporate
+    const memory = readRepoMemory(cwd);
+    expect(memory?.costUsd).toBe(0.25); // ledger rebuilt from session costs
+    expect(memory?.sessions.get(1)?.cost).toBe(0.25);
   });
 });
 

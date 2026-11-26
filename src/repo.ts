@@ -12,13 +12,26 @@ import { sessionsDir } from "./writer.js";
  * repo memory as context. No prescribed structure; the model decides the
  * shape. Loaded verbatim into future agents' system prompts (via
  * agent-specific shims), so it must stay succinct and private.
+ *
+ * sessions_cost_usd is the sum of the incorporated sessions' own cost_usd
+ * values — the cost of the work the sessions did, not the cost of making the
+ * memory (naming is deliberate: the field was misread as "cost of generating
+ * the repo memory" twice). A re-incorporated session replaces its previous
+ * contribution.
  */
+
+export interface SessionRef {
+  hash: string;
+  /** cost_usd as written in the session summary (rounded to 2 decimals);
+   *  undefined marks a legacy entry predating per-session costs */
+  cost?: number;
+}
 
 export interface RepoMemory {
   body: string;
-  /** index → content hash of the session summary at last incorporation */
-  sessions: Map<number, string>;
-  /** cumulative raw spend across all updates (not per-update rounded) */
+  /** index → session reference at last incorporation */
+  sessions: Map<number, SessionRef>;
+  /** sum of the incorporated sessions' cost_usd */
   costUsd: number;
 }
 
@@ -39,12 +52,16 @@ export function readRepoMemory(cwd: string): RepoMemory | null {
   if (!m) return { body: content.trim(), sessions: new Map(), costUsd: 0 };
   const fm = m[1];
   const sessionsLine = fm.match(/^sessions: (.+)$/m)?.[1];
-  const costLine = fm.match(/^cost_usd: (.+)$/m)?.[1];
-  const sessions = new Map<number, string>();
+  const costLine = fm.match(/^sessions_cost_usd: (.+)$/m)?.[1];
+  const sessions = new Map<number, SessionRef>();
   if (sessionsLine) {
     for (const entry of sessionsLine.split(",")) {
-      const e = entry.match(/^\s*(\d+):([0-9a-f]+)\s*$/);
-      if (e) sessions.set(Number(e[1]), e[2]);
+      const e = entry.match(/^\s*(\d+):([0-9a-f]+)(?::(\d+(?:\.\d+)?))?\s*$/);
+      if (e)
+        sessions.set(Number(e[1]), {
+          hash: e[2],
+          cost: e[3] === undefined ? undefined : Number(e[3]),
+        });
     }
   }
   return {
@@ -57,10 +74,12 @@ export function readRepoMemory(cwd: string): RepoMemory | null {
 export interface SessionBody {
   index: number;
   hash: string;
+  /** cost_usd from the session summary frontmatter */
+  cost: number;
   body: string;
 }
 
-/** All session summaries, index-sorted, frontmatter stripped, with content hash. */
+/** All session summaries, index-sorted, frontmatter stripped, with hash + cost. */
 export function collectSessionBodies(cwd: string): SessionBody[] {
   const dir = sessionsDir(cwd);
   if (!existsSync(dir)) return [];
@@ -74,8 +93,10 @@ export function collectSessionBodies(cwd: string): SessionBody[] {
     } catch {
       continue;
     }
+    const fm = content.match(/^---\n([\s\S]*?)\n---/)?.[1] ?? "";
+    const cost = Number(fm.match(/^cost_usd: (.+)$/m)?.[1] ?? 0) || 0;
     const body = content.replace(/^---\n[\s\S]*?\n---\n?/, "").trim();
-    if (body) out.push({ index: Number(m[1]), hash: hashSession(content), body });
+    if (body) out.push({ index: Number(m[1]), hash: hashSession(content), cost, body });
   }
   return out;
 }
@@ -108,14 +129,14 @@ export function buildRepoPrompt(input: RepoPromptInput): { system: string; user:
 }
 
 export function renderRepoMemory(
-  fm: { updated: string; sessions: [number, string][]; cost_usd: number },
+  fm: { updated: string; sessions: [number, SessionRef][]; sessions_cost_usd: number },
   body: string,
 ): string {
   const lines = [
     "---",
     `updated: ${fm.updated}`,
-    `sessions: ${fm.sessions.map(([i, h]) => `${i}:${h}`).join(", ")}`,
-    `cost_usd: ${fm.cost_usd}`,
+    `sessions: ${fm.sessions.map(([i, r]) => `${i}:${r.hash}:${r.cost ?? 0}`).join(", ")}`,
+    `sessions_cost_usd: ${fm.sessions_cost_usd}`,
     "---",
     "",
     body,
@@ -142,7 +163,12 @@ export async function updateRepoMemory(opts: {
 }): Promise<RepoUpdateResult | null> {
   const existing = readRepoMemory(opts.cwd);
   const all = collectSessionBodies(opts.cwd);
-  const changed = all.filter((s) => existing?.sessions.get(s.index) !== s.hash);
+  // changed = content hash drifted, or the recorded cost no longer matches
+  // the session file (also catches legacy entries without a recorded cost)
+  const changed = all.filter((s) => {
+    const rec = existing?.sessions.get(s.index);
+    return rec?.hash !== s.hash || rec?.cost !== s.cost;
+  });
   if (changed.length === 0) return null;
 
   const prompt = buildRepoPrompt({
@@ -151,18 +177,16 @@ export async function updateRepoMemory(opts: {
   });
   const res = await opts.llm({ system: prompt.system, user: prompt.user });
 
-  // accumulate raw cost — per-update round-up would inflate a running total
-  // (each sub-cent update becomes a whole cent). Store 4 decimals: drift-free
-  // at sub-cent scale, still human-readable.
-  const prevCost = existing?.costUsd ?? 0;
-  const thisCost = res.usage?.cost ?? 0;
-  const merged = new Map(existing?.sessions ?? []);
-  for (const s of changed) merged.set(s.index, s.hash);
+  // sessions ledger: changed sessions replace their previous entry; cost is
+  // the sum of the incorporated sessions' own cost_usd (never re-added)
+  const merged = new Map<number, SessionRef>(existing?.sessions ?? []);
+  for (const s of changed) merged.set(s.index, { hash: s.hash, cost: s.cost });
+  const total = [...merged.values()].reduce((acc, r) => acc + (r.cost ?? 0), 0);
   const md = renderRepoMemory(
     {
       updated: new Date().toISOString(),
       sessions: [...merged.entries()].sort((a, b) => a[0] - b[0]),
-      cost_usd: round4(prevCost + thisCost),
+      sessions_cost_usd: Number(total.toFixed(2)),
     },
     res.text,
   );
@@ -173,9 +197,4 @@ export async function updateRepoMemory(opts: {
     prompt: prompt.user,
     response: res.text,
   };
-}
-
-/** Round to 4 decimal places (sub-cent precision for a running total). */
-function round4(costUsd: number): number {
-  return Number(costUsd.toFixed(4));
 }
