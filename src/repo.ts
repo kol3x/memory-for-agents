@@ -29,6 +29,8 @@ export interface SessionRef {
 
 export interface RepoMemory {
   body: string;
+  /** updated timestamp from the frontmatter (used for shim staleness) */
+  updated?: string;
   /** index → session reference at last incorporation */
   sessions: Map<number, SessionRef>;
   /** sum of the incorporated sessions' session_cost_usd */
@@ -51,6 +53,7 @@ export function readRepoMemory(cwd: string): RepoMemory | null {
   const m = content.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
   if (!m) return { body: content.trim(), sessions: new Map(), costUsd: 0 };
   const fm = m[1];
+  const updatedLine = fm.match(/^updated: (.+)$/m)?.[1];
   const sessionsLine = fm.match(/^sessions: (.+)$/m)?.[1];
   const costLine = fm.match(/^sessions_cost_usd: (.+)$/m)?.[1];
   const sessions = new Map<number, SessionRef>();
@@ -66,6 +69,7 @@ export function readRepoMemory(cwd: string): RepoMemory | null {
   }
   return {
     body: m[2].trim(),
+    updated: updatedLine,
     sessions,
     costUsd: costLine ? Number(costLine) || 0 : 0,
   };
