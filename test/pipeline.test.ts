@@ -61,7 +61,7 @@ describe("markdown writer", () => {
     writeFileSync(file, renderMarkdown({
       session: r.sessionId, name: "test-session", index: 1,
       date: t.startedAt, agent: r.agent, model: t.model,
-      cost_usd: roundCostUp(0.0021),
+      session_cost_usd: roundCostUp(0.0021),
     }, r.summary));
     expect(existsSync(file)).toBe(true);
 
@@ -70,7 +70,7 @@ describe("markdown writer", () => {
     expect(md).toContain("session: test-session-001");
     expect(md).toContain("agent: pi");
     expect(md).toContain("model: test-model");
-    expect(md).toContain("cost_usd: 0.01"); // 0.0021 rounds up to 2 decimals
+    expect(md).toContain("session_cost_usd: 0.01"); // 0.0021 rounds up to 2 decimals
     expect(md).not.toContain("cwd:");
     expect(md).toContain("SUMMARY OF INPUT");
 
@@ -107,12 +107,12 @@ describe("indexing", () => {
     writeFileSync(summaryPath(dir, 1, "first-session"),
       renderMarkdown({
         session: "s1", name: "first-session", index: 1,
-        cost_usd: 0,
+        session_cost_usd: 0,
       }, "body"));
     writeFileSync(summaryPath(dir, 2, "second-thing"),
       renderMarkdown({
         session: "s2", name: "second-thing", index: 2,
-        cost_usd: 0,
+        session_cost_usd: 0,
       }, "body"));
 
     expect(nextIndex(dir)).toBe(3);

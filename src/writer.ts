@@ -17,7 +17,8 @@ export interface Frontmatter {
   date?: string;
   agent?: string;
   model?: string;
-  cost_usd: number;
+  /** the agent session's own spend, rounded up to 2 decimals */
+  session_cost_usd: number;
 }
 
 export function sessionsDir(cwd: string): string {
@@ -99,7 +100,7 @@ export function renderMarkdown(fm: Frontmatter, body: string): string {
     fm.date ? `date: ${fm.date}` : null,
     fm.agent ? `agent: ${fm.agent}` : null,
     fm.model ? `model: ${fm.model}` : null,
-    `cost_usd: ${fm.cost_usd}`,
+    `session_cost_usd: ${fm.session_cost_usd}`,
     "---",
     "",
     body,

@@ -13,11 +13,11 @@ import { sessionsDir } from "./writer.js";
  * shape. Loaded verbatim into future agents' system prompts (via
  * agent-specific shims), so it must stay succinct and private.
  *
- * sessions_cost_usd is the sum of the incorporated sessions' own cost_usd
- * values — the cost of the work the sessions did, not the cost of making the
- * memory (naming is deliberate: the field was misread as "cost of generating
- * the repo memory" twice). A re-incorporated session replaces its previous
- * contribution.
+ * sessions_cost_usd is the sum of the incorporated sessions' own
+ * session_cost_usd values — the cost of the work the sessions did, not the
+ * cost of making the memory (naming is deliberate: the field was misread as
+ * "cost of generating the repo memory" twice). A re-incorporated session
+ * replaces its previous contribution.
  */
 
 export interface SessionRef {
@@ -31,7 +31,7 @@ export interface RepoMemory {
   body: string;
   /** index → session reference at last incorporation */
   sessions: Map<number, SessionRef>;
-  /** sum of the incorporated sessions' cost_usd */
+  /** sum of the incorporated sessions' session_cost_usd */
   costUsd: number;
 }
 
@@ -74,7 +74,7 @@ export function readRepoMemory(cwd: string): RepoMemory | null {
 export interface SessionBody {
   index: number;
   hash: string;
-  /** cost_usd from the session summary frontmatter */
+  /** session_cost_usd from the session summary frontmatter */
   cost: number;
   body: string;
 }
@@ -94,7 +94,9 @@ export function collectSessionBodies(cwd: string): SessionBody[] {
       continue;
     }
     const fm = content.match(/^---\n([\s\S]*?)\n---/)?.[1] ?? "";
-    const cost = Number(fm.match(/^cost_usd: (.+)$/m)?.[1] ?? 0) || 0;
+    // session_cost_usd, falling back to the pre-rename cost_usd field
+    const cost =
+      Number(fm.match(/^session_cost_usd: (.+)$/m)?.[1] ?? fm.match(/^cost_usd: (.+)$/m)?.[1] ?? 0) || 0;
     const body = content.replace(/^---\n[\s\S]*?\n---\n?/, "").trim();
     if (body) out.push({ index: Number(m[1]), hash: hashSession(content), cost, body });
   }
@@ -178,7 +180,7 @@ export async function updateRepoMemory(opts: {
   const res = await opts.llm({ system: prompt.system, user: prompt.user });
 
   // sessions ledger: changed sessions replace their previous entry; cost is
-  // the sum of the incorporated sessions' own cost_usd (never re-added)
+  // the sum of the incorporated sessions' own session_cost_usd (never re-added)
   const merged = new Map<number, SessionRef>(existing?.sessions ?? []);
   for (const s of changed) merged.set(s.index, { hash: s.hash, cost: s.cost });
   const total = [...merged.values()].reduce((acc, r) => acc + (r.cost ?? 0), 0);

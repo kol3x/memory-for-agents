@@ -25,10 +25,17 @@ function makeRepo(): string {
   return cwd;
 }
 
-function sessionFile(cwd: string, index: number, name: string, body: string, cost = 0.1): void {
+function sessionFile(
+  cwd: string,
+  index: number,
+  name: string,
+  body: string,
+  cost = 0.1,
+  field = "session_cost_usd",
+): void {
   writeFileSync(
     join(cwd, ".memory", "sessions", `${index}-${name}.md`),
-    `---\nsession: s-${index}\nname: ${name}\nindex: ${index}\ncost_usd: ${cost}\n---\n\n${body}\n`,
+    `---\nsession: s-${index}\nname: ${name}\nindex: ${index}\n${field}: ${cost}\n---\n\n${body}\n`,
   );
 }
 
@@ -117,6 +124,15 @@ describe("repo memory update", () => {
 
     const memory = readRepoMemory(cwd);
     expect(memory?.costUsd).toBe(0.3); // replaced, not accumulated
+  });
+
+  it("reads legacy cost_usd session files too", async () => {
+    const cwd = makeRepo();
+    sessionFile(cwd, 1, "first", "body", 0.25, "cost_usd");
+    const calls: { system: string; user: string }[] = [];
+    const result = await updateRepoMemory({ cwd, llm: fakeLlm(["M"], calls) });
+    expect(result?.included.map((s) => s.index)).toEqual([1]);
+    expect(readRepoMemory(cwd)?.costUsd).toBe(0.25);
   });
 
   it("migrates legacy entries without costs by re-incorporating them — even with matching hash", async () => {

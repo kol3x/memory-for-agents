@@ -116,7 +116,7 @@ async function main() {
       date: transcript.startedAt,
       agent: transcript.agent,
       model: transcript.model,
-      cost_usd: spend ? roundCostUp(spend.costUsd) : 0,
+      session_cost_usd: spend ? roundCostUp(spend.costUsd) : 0,
     },
     result.summary,
   );
