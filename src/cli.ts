@@ -1,21 +1,23 @@
 #!/usr/bin/env node
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { parsePiSession } from "./adapters/pi.js";
 import { runPipeline } from "./pipeline.js";
 import { updateRepoMemory } from "./repo.js";
 import { syncAgents } from "./agents.js";
-import { openRouterClient } from "./summarizer.js";
+import { openRouterClient, type LlmClient } from "./summarizer.js";
+import { discoverSessions } from "./discovery.js";
+import { runTriage, loadDecisions } from "./triage.js";
+import { runBackfill } from "./backfill.js";
 import { sessionName, slugify } from "./naming.js";
 import {
-  renderMarkdown,
-  summaryPath,
-  inputPath,
   debugDir,
   debugFileName,
   findExistingSummary,
   nextIndex,
   roundCostUp,
+  ensureGitignore,
+  writeSummaryArtifacts,
 } from "./writer.js";
 
 /**
@@ -23,6 +25,8 @@ import {
  *   npx tsx src/cli.ts <session.jsonl> [--debug] [--existing <summary-file>]
  *   npx tsx src/cli.ts --repo
  *   npx tsx src/cli.ts --sync-agents [--agents claude,gemini]
+ *   npx tsx src/cli.ts --triage <repo-path> [--dry-run]
+ *   npx tsx src/cli.ts --backfill <repo-path> [--concurrency N] [--limit N] [--decisions <file>]
  *
  * Env:
  *   OPENROUTER_API_KEY   required (except for --sync-agents)
@@ -35,6 +39,12 @@ function parseArgs(argv: string[]) {
   let existing: string | undefined;
   let repo = false;
   let syncAgentsFlag = false;
+  let triage = false;
+  let backfill = false;
+  let dryRun = false;
+  let concurrency: number | undefined;
+  let limit: number | undefined;
+  let decisions: string | undefined;
   let agents: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -42,10 +52,20 @@ function parseArgs(argv: string[]) {
     else if (a === "--existing") existing = argv[++i];
     else if (a === "--repo") repo = true;
     else if (a === "--sync-agents") syncAgentsFlag = true;
+    else if (a === "--triage") triage = true;
+    else if (a === "--backfill") backfill = true;
+    else if (a === "--dry-run") dryRun = true;
+    else if (a === "--concurrency") concurrency = Number(argv[++i]);
+    else if (a === "--limit") limit = Number(argv[++i]);
+    else if (a === "--decisions") decisions = argv[++i];
     else if (a === "--agents") agents = (argv[++i] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
     else positional.push(a);
   }
-  return { positional, debug, existing, repo, syncAgentsFlag, agents };
+  return { positional, debug, existing, repo, syncAgentsFlag, triage, backfill, dryRun, concurrency, limit, decisions, agents };
+}
+
+function reportGitignore(state: "created" | "updated" | "unchanged") {
+  if (state !== "unchanged") console.log(`.gitignore ${state} (local-artifacts block)`);
 }
 
 function reportSync(cwd: string, agents: string[]) {
@@ -61,6 +81,23 @@ function reportSync(cwd: string, agents: string[]) {
     console.log(`shims skipped (user-owned): ${sync.shimsSkipped.join(", ")}`);
 }
 
+/** one chained repo-memory update after summaries are written; non-fatal */
+async function chainRepoMemory(cwd: string, llm: LlmClient, agents: string[]) {
+  try {
+    const repoResult = await updateRepoMemory({ cwd, llm });
+    if (repoResult) {
+      console.log(
+        `repo memory updated (sessions: ${repoResult.included.map((s) => s.index).join(", ")})`,
+      );
+    }
+    // agent entry points follow the repo memory (managed block + existing
+    // shims); shim creation stays on demand via --agents
+    reportSync(cwd, agents);
+  } catch (err) {
+    console.error(`repo memory update failed: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const sessionPath = args.positional[0];
@@ -68,6 +105,72 @@ async function main() {
   // --sync-agents is LLM-free: pure file transformation
   if (args.syncAgentsFlag) {
     reportSync(process.cwd(), args.agents);
+    return;
+  }
+
+  // --triage: triage a repo's historical sessions — deterministic, no LLM
+  if (args.triage) {
+    const repoPath = sessionPath ?? process.cwd();
+    const sessions = discoverSessions(repoPath);
+    console.log(`discovered ${sessions.length} sessions in ${repoPath}`);
+    const result = runTriage(sessions, repoPath);
+    const { stats } = result;
+    console.log(`total: ${stats.total}  keep: ${stats.keep}  skip: ${stats.skip}`);
+    if (!args.dryRun) {
+      const dir = join(repoPath, ".memory", "triage");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "manifest.md"), result.manifest);
+      writeFileSync(join(dir, "decisions.tsv"), result.decisions);
+      reportGitignore(ensureGitignore(repoPath));
+      console.log(`${dir}/manifest.md   (local review — gitignored automatically)`);
+      console.log(`${dir}/decisions.tsv  (committable verdicts)`);
+    }
+    return;
+  }
+
+  // --backfill: summarize sessions triage marked keep, then one repo update
+  if (args.backfill) {
+    const repoPath = sessionPath ?? process.cwd();
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    if (!apiKey) {
+      console.error("OPENROUTER_API_KEY not set");
+      process.exit(1);
+    }
+    const model = process.env.OPENROUTER_MODEL ?? "z-ai/glm-5.3-flash";
+    const llm = openRouterClient({ apiKey, model });
+    const decisionsFile =
+      args.decisions ?? join(repoPath, ".memory", "triage", "decisions.tsv");
+    const decisions = loadDecisions(decisionsFile);
+    const sessions = discoverSessions(repoPath).filter((s) => {
+      const v = decisions.get(`${s.agent}:${s.sessionId}`);
+      if (v === "keep") return true;
+      if (v === undefined)
+        console.error(`no triage verdict for ${s.ref.slice(0, 60)}… — skipping`);
+      return false;
+    });
+    console.log(
+      `backfilling ${sessions.length} keep sessions` +
+        (args.limit ? ` (limit ${args.limit})` : ""),
+    );
+    reportGitignore(ensureGitignore(repoPath));
+    const result = await runBackfill(sessions, repoPath, {
+      llm,
+      concurrency: args.concurrency ?? 5,
+      limit: args.limit,
+      onResult: (o) => {
+        if (o.status === "summarized")
+          console.log(`✓ ${o.index}-${o.name}`);
+        else if (o.status === "failed")
+          console.error(`✗ ${o.session.ref.slice(0, 60)}: ${o.error}`);
+      },
+    });
+    console.log(
+      `summarized: ${result.summarized}  already had summaries: ${result.skippedExisting}  failed: ${result.failed}  backfill LLM cost: $${result.llmCostUsd.toFixed(4)}`,
+    );
+    if (result.failed > 0)
+      console.error("rerun --backfill to retry failed sessions (existing summaries are skipped)");
+
+    await chainRepoMemory(repoPath, llm, args.agents);
     return;
   }
 
@@ -127,46 +230,26 @@ async function main() {
     existing?.name ??
     (result.name ? slugify(result.name) : sessionName(transcript));
   const index = existing?.index ?? nextIndex(cwd);
-
-  // shaped no-tools input — transparency artifact, never committed
-  const inputFile = inputPath(cwd, index, name);
-  mkdirSync(dirname(inputFile), { recursive: true });
-  writeFileSync(inputFile, result.input + "\n");
-
-  const file = summaryPath(cwd, index, name);
-  mkdirSync(dirname(file), { recursive: true });
   const spend = transcript.spend;
-  const md = renderMarkdown(
-    {
-      session: result.sessionId,
-      name,
-      index,
-      date: transcript.startedAt,
-      agent: transcript.agent,
-      model: transcript.model,
-      session_cost_usd: spend ? roundCostUp(spend.costUsd) : 0,
-    },
-    result.summary,
-  );
-  writeFileSync(file, md);
-  console.log(file);
-  console.log(inputFile);
+
+  const written = writeSummaryArtifacts(cwd, {
+    sessionId: result.sessionId,
+    name,
+    index,
+    date: transcript.startedAt,
+    agent: transcript.agent,
+    model: transcript.model,
+    sessionCostUsd: spend ? roundCostUp(spend.costUsd) : 0,
+    input: result.input,
+    summary: result.summary,
+  });
+  reportGitignore(written.gitignore);
+  console.log(written.file);
+  console.log(written.inputFile);
 
   // keep the repo memory current on every session update — re-incorporates
   // this (and any other changed) session summary. Non-fatal on failure.
-  try {
-    const repoResult = await updateRepoMemory({ cwd, llm });
-    if (repoResult) {
-      console.log(
-        `repo memory updated (sessions: ${repoResult.included.map((s) => s.index).join(", ")})`,
-      );
-    }
-    // agent entry points follow the repo memory (managed block + existing
-    // shims); shim creation stays on demand via --agents
-    reportSync(cwd, args.agents);
-  } catch (err) {
-    console.error(`repo memory update failed: ${err instanceof Error ? err.message : err}`);
-  }
+  await chainRepoMemory(cwd, llm, args.agents);
 }
 
 main().catch((err) => {
