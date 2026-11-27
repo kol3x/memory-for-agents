@@ -31,3 +31,15 @@ describe("input shaping", () => {
     expect(shapeInput(transcript)).not.toContain("project structure first");
   });
 });
+
+  it("excludes branched (abandoned session-tree) messages", () => {
+    const input = shapeInput({
+      messages: [
+        { role: "user", text: "retracted question", branched: true },
+        { role: "assistant", text: "retracted answer", branched: true },
+        { role: "user", text: "the real question" },
+        { role: "assistant", text: "the real answer" },
+      ],
+    });
+    expect(input).toBe("[user] the real question\n\n[assistant] the real answer");
+  });

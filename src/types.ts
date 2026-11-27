@@ -14,6 +14,9 @@ export type NormalizedRole = "user" | "assistant" | "tool";
 export interface NormalizedMessage {
   role: NormalizedRole;
   timestamp?: number;
+  /** true when the message sits on an abandoned session-tree branch (pi
+   * rewinds): excluded from summary input, counted separately in triage */
+  branched?: boolean;
   /** user/assistant plain text */
   text?: string;
   /** assistant: thinking blocks (kept out of summary input by default) */

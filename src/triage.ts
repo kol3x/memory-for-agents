@@ -44,7 +44,9 @@ export interface TriageScorecard {
   /** session wall time in minutes, when determinable */
   minutes: number | null;
   tools: { writeLike: number; readLike: number; bash: number; bashContent: number; bashInfra: number; other: number };
-  /** repo-relative files the session edited (inside the repo) */
+  /** tool calls from abandoned session-tree branches (not counted above) */
+  offPathToolCalls: number;
+  /** repo-relative files the session edited (inside the repo, active path) */
   changedPaths: string[];
   /** edit calls whose paths were all outside this repo (cross-repo work) */
   outsideEdits: number;
@@ -245,8 +247,15 @@ export function scorecard(
   let outsideEdits = 0;
   let firstTs: number | undefined;
   let lastTs: number | undefined;
+  let offPathToolCalls = 0;
 
   for (const m of transcript.messages) {
+    if (m.branched) {
+      // abandoned session-tree branch: real tool calls, but not part of the
+      // conversation that happened — counted separately, never verdict input
+      offPathToolCalls += (m.toolCalls ?? []).length;
+      continue;
+    }
     if (m.timestamp !== undefined) {
       firstTs ??= m.timestamp;
       lastTs = m.timestamp;
@@ -347,6 +356,7 @@ export function scorecard(
     asstMsgs,
     minutes,
     tools,
+    offPathToolCalls,
     commits: commitsInWindow,
     changedPaths,
     outsideEdits,
@@ -380,18 +390,18 @@ export function renderManifest(cards: TriageScorecard[]): string {
     "backfill consumes the corrected decisions.tsv.",
     "",
     "Columns: W=edit/write calls, R=read calls, B=bash calls (C=content-mutating bash),",
-    "commits=in-window commits, landed=changed files touched by later commits",
-    "(Y/N, – = not applicable).",
+    "off=tool calls on abandoned session-tree branches, commits=in-window commits,",
+    "landed=changed files touched by later commits (Y/N, – = not applicable).",
     "",
-    "| # | date | agent | verdict | tok | min | W/R/B(M) | commits | landed | reason | snippet |",
-    "|---|------|-------|---------|-----|-----|----------|---------|--------|--------|---------|",
+    "| # | date | agent | verdict | tok | min | W/R/B(C) | off | commits | landed | reason | snippet |",
+    "|---|------|-------|---------|-----|-----|----------|-----|---------|--------|--------|---------|",
   ];
   const rows = cards.map((c, i) => {
     const date = c.date ? c.date.slice(0, 10) : "?";
     const tok = c.totalTokens >= 1000 ? `${Math.round(c.totalTokens / 1000)}k` : String(c.totalTokens);
     const min = c.minutes === null ? "?" : String(c.minutes);
     const landed = c.landedLater === null ? "–" : c.landedLater ? "Y" : "N";
-    return `| ${i + 1} | ${date} | ${c.agent} | ${c.verdict} | ${tok} | ${min} | ${c.tools.writeLike}/${c.tools.readLike}/${c.tools.bash}(${c.tools.bashContent}) | ${c.commits} | ${landed} | ${c.reason} | ${escapeCell(c.snippet)} |`;
+    return `| ${i + 1} | ${date} | ${c.agent} | ${c.verdict} | ${tok} | ${min} | ${c.tools.writeLike}/${c.tools.readLike}/${c.tools.bash}(${c.tools.bashContent}) | ${c.offPathToolCalls} | ${c.commits} | ${landed} | ${c.reason} | ${escapeCell(c.snippet)} |`;
   });
   return [...head, ...rows, ""].join("\n");
 }
