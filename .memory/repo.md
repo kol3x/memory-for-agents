@@ -1,10 +1,10 @@
 ---
-updated: 2026-11-26T14:14:06.745Z
-sessions: 1:1fa4bf8c:0.22, 2:2d9c9134:0.13, 3:7482d90b:0.02
-sessions_cost_usd: 0.37
+updated: 2026-11-27T12:44:10.868Z
+sessions: 1:1fa4bf8c:0.22, 2:2d9c9134:0.13, 3:7482d90b:0.02, 4:3bf86f86:0.55
+sessions_cost_usd: 0.92
 ---
 
-Memory layer for AI agents (local-first POC), leveraging prior pawmc experience. Layers: session summaries + repo-wide memory. TypeScript, everything local for now; runtime likely moves to Cloudflare Workers later (fetch-only HTTP keeps the code portable). Works with pi now, more agents later via adapters. Vitest integration tests for major features/critical paths use a fake LLM client.
+Memory layer for AI agents (local-first POC), leveraging prior pawmc experience. Layers: session summaries + repo-wide memory. TypeScript, everything local for now; runtime likely moves to Cloudflare Workers later (fetch-only HTTP keeps the code portable). Works with pi now, more agents later via adapters. Vitest integration tests for major features/critical paths use a fake LLM client; suite at 63, green.
 
 Session-summary layer:
 - Pipeline: pi JSONL (v3) session adapter → normalized transcript → input shaper → summarizer (pawmc-style prompt, OpenRouter, env-configured key/model, fetch-only) → markdown writer. CLI: `tsx src/cli.ts <session.jsonl> [--debug] [--existing <file>]`. Debug mode dumps every step (transcript, input, prompt, LLM response).
@@ -15,6 +15,17 @@ Session-summary layer:
 - Input only, no tools — tools-in dropped as a privacy liability (A/B'd early; no-tools preferred); never reintroduce without resolving it. Parked idea: opt-in tool-context layer stored separately.
 - Shaped input written every run to gitignored `.memory/inputs/`, paired by basename with the summary (local transparency layer; treated as a privacy risk — structural fix for sharing deferred; folder never committed, ignore rule shipped on main).
 - Day-one privacy-audit/remote-setup session intentionally left unsummarized — stays out of memory entirely; never summarize its transcript. A day-one session summary was regenerated to drop a stale "private-data filter pending" line (the filter is implemented) and record a summary-amend incident that produced the regenerate-before-commit rule.
+
+Scale & provider decisions:
+- User requires zero-data-retention providers (training-on-data ones disabled); batch APIs rejected because only data-training providers expose batching → plain unbatched calls (backfill used GLM 5.3 flash).
+- Rust JSON-parser rewrite rejected: parsing measures in milliseconds per session while LLM calls dominate wall clock — parallelism is the lever, not parser speed. Session-name generation cost too minor to optimize.
+
+Multi-agent discovery & backfill:
+- Discovery: pi JSONL stores plus opencode's SQLite store (legacy and v2 tables, deduped). Target repo (personal-assistant project): 33 pi + 222 opencode sessions → 183 after dedupe.
+- Triage is fully deterministic (no LLM, no API key): no-change sessions skipped (bash-mutation carve-out); dropped work verified by whether the changes later landed in main — content-level check, file-path overlap rejected as too weak; keep-by-commits requires change evidence (closes the parallel-session false positive); content vs. infra mutations split (installs, pulls, API calls, commit-only sessions = infra → skip); outside-repo edits = skips; stderr-redirect false positives fixed. Git-log parser bug (record-separator quirk silently dropped ~75% of commits) fixed with a regression test. These fixes cut the review bucket 29 → 2; remaining ambiguous rows default to skip. `--dry-run` prints stats, writes nothing. Final split: 82 keep / 101 skip.
+- Backfill: concurrent summarization (5 at a time) of KEEP rows, skip-existing idempotency, one chained repo-memory update + AGENTS.md sync at the end. Full run: 82 summaries, 0 failures, ~7 minutes, ~$0.12; reruns are no-ops.
+- Auto-gitignore: managed block ignores private artifacts (shaped inputs, debug dumps, triage manifest); decisions.tsv, sessions/, repo.md, and AGENTS.md stay committable; ensured on every write path.
+- DRY refactor: shared summary-artifact writer and chained-repo-update helper; the concurrency pool lives in the backfill module.
 
 Repo-memory layer:
 - Single file `.memory/repo.md` summarizing all session summaries; no prescribed structure; previous version included as context; privacy rule applies verbatim plus "keep it succinct" (it feeds future agents' system prompts).
@@ -30,8 +41,9 @@ Agent-memory sync:
 - CLI: `--sync-agents [--agents claude,gemini]`, standalone and LLM-free; auto-chains at the end of every session-summary run and `--repo`, inside the existing non-fatal try/catch. Shims are created only when named via `--agents`; existing shims refresh on every chain. All writes content-compared — unchanged state is a true no-op. `npm run sync-agents`.
 - Verified live on this repo: AGENTS.md carries the block after the standing rules.
 
-Rules (AGENTS.md): regenerate the session summary before each commit and include it; commit only summaries (debug artifacts and inputs gitignored); commit in logical steps; never reintroduce tools-in; PR push/open is manual per rules; never amend already-pushed commits — fix on a branch + PR, force-push with lease.
+Rules (AGENTS.md): regenerate the session summary before each commit and include it; commit only summaries (debug artifacts, shaped inputs, and the triage manifest are gitignored via the managed block); commit in logical steps; never reintroduce tools-in; PR push/open is manual per rules; never amend already-pushed commits — fix on a branch + PR, force-push with lease.
 
 Pending:
+- Target-repo artifacts (summaries, decisions.tsv, repo.md, AGENTS.md) uncommitted pending user review; tool changes being committed in logical steps on branch `multi-agent-backfill` off main — commit sequence was still in progress at session end.
 - Cost-field rename migration: session 2 regenerated and incorporated under the new field; session 1 still on legacy `cost_usd` (reader fallback covers it) — regenerate it to finish.
 - Structural privacy design for ever sharing raw inputs; optional deterministic secret-pattern post-check.
