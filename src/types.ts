@@ -75,5 +75,7 @@ export interface PipelineResult {
   sessionId: string;
   agent?: string;
   messageCount: number;
+  /** usage/cost of the summarization call itself */
+  usage?: LlmUsage;
   steps: PipelineStep[];
 }
