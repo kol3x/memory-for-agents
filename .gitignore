@@ -11,3 +11,9 @@ dist/
 
 # tools-in summaries are a privacy liability; if one ever exists, never track it
 *with-tools*
+
+# memory-for-agents:begin (local artifacts — never commit)
+.memory/inputs/
+.memory/debug/
+.memory/triage/manifest.md
+# memory-for-agents:end

@@ -61,6 +61,7 @@ export async function runPipeline(
     sessionId: transcript.sessionId,
     agent: transcript.agent,
     messageCount: transcript.messages.length,
+    usage: response.usage,
     steps: keep,
   };
 }

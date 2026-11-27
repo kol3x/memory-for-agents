@@ -41,6 +41,7 @@ interface RawMessage {
 interface RawEntry {
   type: string;
   id?: string;
+  parentId?: string | null;
   timestamp?: string;
   cwd?: string;
   provider?: string;
@@ -58,6 +59,16 @@ export function parsePiSession(jsonl: string): NormalizedTranscript {
   const usageAcc = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
   let costAcc = 0;
 
+  // pass 1: collect entries — the tree indexes ALL id'd entries (parent
+  // chains run through custom_message/model_change nodes), messages are
+  // normalized in pass 2
+  interface MsgEntry {
+    id?: string;
+    parentId?: string | null;
+    message: RawMessage;
+  }
+  const msgEntries: MsgEntry[] = [];
+  const entries: { id: string; parentId?: string | null }[] = [];
   for (const line of lines) {
     let entry: RawEntry;
     try {
@@ -74,62 +85,33 @@ export function parsePiSession(jsonl: string): NormalizedTranscript {
     }
     if (entry.type === "model_change") {
       model = entry.modelId;
-      continue;
     }
-    if (entry.type !== "message" || !entry.message) continue;
-
-    const raw = entry.message;
-    // system preamble is harness boilerplate, not conversation
-    if (raw.role === "system") continue;
-
-    if (raw.role === "user") {
-      messages.push({
-        role: "user",
-        timestamp: raw.timestamp,
-        text: flattenText(raw.content),
-      });
-      continue;
+    if (entry.type === "message" && entry.message) {
+      msgEntries.push({ id: entry.id, parentId: entry.parentId, message: entry.message });
     }
+    if (entry.id) entries.push({ id: entry.id, parentId: entry.parentId });
+  }
 
-    if (raw.role === "assistant") {
-      const blocks = asBlocks(raw.content);
-      const msg: NormalizedMessage = {
-        role: "assistant",
-        timestamp: raw.timestamp,
-        text: flattenText(blocks),
-        thinking: flattenText(blocks, "thinking"),
-      };
-      const toolCalls = blocks
-        .filter((b) => b.type === "toolCall")
-        .map((b) => ({ id: b.id ?? "", name: b.name ?? "", arguments: b.arguments }));
-      if (toolCalls.length > 0) msg.toolCalls = toolCalls;
-      messages.push(msg);
-      if (raw.usage) {
-        usageAcc.input += raw.usage.input ?? 0;
-        usageAcc.output += raw.usage.output ?? 0;
-        usageAcc.cacheRead += raw.usage.cacheRead ?? 0;
-        usageAcc.cacheWrite += raw.usage.cacheWrite ?? 0;
-        usageAcc.total += raw.usage.totalTokens ?? 0;
-        const c = raw.usage.cost;
-        if (c) {
-          costAcc +=
-            c.total ??
-            (c.input ?? 0) + (c.output ?? 0) + (c.cacheRead ?? 0) + (c.cacheWrite ?? 0);
-        }
-      }
-      continue;
+  // active path: the parent chain ending at the last message entry (the
+  // session's current tip). Everything else is an abandoned branch.
+  const byId = new Map(entries.filter((e) => e.id).map((e) => [e.id as string, e]));
+  const activeIds = new Set<string>();
+  let tip = msgEntries[msgEntries.length - 1]?.id;
+  if (tip) {
+    while (tip && byId.has(tip)) {
+      activeIds.add(tip);
+      tip = byId.get(tip)!.parentId ?? undefined;
     }
+  }
+  // no resolvable chain (old/odd files) → treat all as active
+  if (msgEntries.some((e) => e.id) && activeIds.size === 0) {
+    for (const e of msgEntries) if (e.id) activeIds.add(e.id);
+  }
 
-    if (raw.role === "toolResult") {
-      messages.push({
-        role: "tool",
-        timestamp: raw.timestamp,
-        toolCallId: raw.toolCallId,
-        toolName: raw.toolName,
-        toolOutput: flattenText(raw.content),
-        toolError: raw.isError === true,
-      });
-    }
+  // pass 2: normalize in file order, marking off-path messages
+  for (const msgEntry of msgEntries) {
+    const branched = Boolean(msgEntry.id && byId.has(msgEntry.id) && !activeIds.has(msgEntry.id));
+    messages.push(...normalizeMessage(msgEntry.message, branched, usageAcc, (c) => (costAcc += c)));
   }
 
   const spend: SessionSpend = {
@@ -144,6 +126,68 @@ export function parsePiSession(jsonl: string): NormalizedTranscript {
   };
 
   return { sessionId, agent: "pi", cwd, startedAt, model, spend, messages };
+}
+
+/** Normalize one raw message; usage/cost always accumulated (real spend). */
+function normalizeMessage(
+  raw: RawMessage,
+  branched: boolean,
+  usageAcc: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number },
+  addCost: (usd: number) => void,
+): NormalizedMessage[] {
+  const out: NormalizedMessage[] = [];
+
+  // system preamble is harness boilerplate, not conversation
+  if (raw.role === "system") return out;
+
+  if (raw.role === "user") {
+    out.push({ role: "user", timestamp: raw.timestamp, text: flattenText(raw.content), branched: branched || undefined });
+    return out;
+  }
+
+  if (raw.role === "assistant") {
+    const blocks = asBlocks(raw.content);
+    const msg: NormalizedMessage = {
+      role: "assistant",
+      timestamp: raw.timestamp,
+      text: flattenText(blocks),
+      thinking: flattenText(blocks, "thinking"),
+      branched: branched || undefined,
+    };
+    const toolCalls = blocks
+      .filter((b) => b.type === "toolCall")
+      .map((b) => ({ id: b.id ?? "", name: b.name ?? "", arguments: b.arguments }));
+    if (toolCalls.length > 0) msg.toolCalls = toolCalls;
+    out.push(msg);
+    if (raw.usage) {
+      usageAcc.input += raw.usage.input ?? 0;
+      usageAcc.output += raw.usage.output ?? 0;
+      usageAcc.cacheRead += raw.usage.cacheRead ?? 0;
+      usageAcc.cacheWrite += raw.usage.cacheWrite ?? 0;
+      usageAcc.total += raw.usage.totalTokens ?? 0;
+      const c = raw.usage.cost;
+      if (c) {
+        addCost(
+          c.total ??
+            (c.input ?? 0) + (c.output ?? 0) + (c.cacheRead ?? 0) + (c.cacheWrite ?? 0),
+        );
+      }
+    }
+    return out;
+  }
+
+  if (raw.role === "toolResult") {
+    out.push({
+      role: "tool",
+      timestamp: raw.timestamp,
+      toolCallId: raw.toolCallId,
+      toolName: raw.toolName,
+      toolOutput: flattenText(raw.content),
+      toolError: raw.isError === true,
+      branched: branched || undefined,
+    });
+  }
+  return out;
 }
 
 function asBlocks(content: string | RawBlock[]): RawBlock[] {

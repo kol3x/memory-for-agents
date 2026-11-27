@@ -5,6 +5,8 @@ import type { NormalizedMessage } from "./types.js";
  * summarizer. Tool activity is always omitted — tool content is a privacy
  * liability and stays out of summaries entirely (dropped by design).
  * Tool outputs are truncated defensively even though they never render.
+ * Messages on abandoned session-tree branches (branched flag) are excluded:
+ * the summary describes the conversation that actually happened.
  */
 
 const DEFAULT_TOOL_OUTPUT_MAX_CHARS = 2000;
@@ -19,6 +21,7 @@ export function shapeInput(
 ): string {
   void opts; // truncation reserved for future, tool outputs never render
   const rendered = transcript.messages
+    .filter((m) => !m.branched)
     .map((m) => renderMessage(m))
     .filter((s): s is string => s !== null);
   return rendered.join("\n\n").trim();
